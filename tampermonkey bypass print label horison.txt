@@ -1,0 +1,381 @@
+// ==UserScript==
+// @name         Bizgo Thermal Label Printer (40x30mm)
+// @namespace    http://tampermonkey.net/
+// @version      1.2
+// @match        *://mz.bizgo.com/*
+// @match        *://*.bizgo.com/*
+// @grant        none
+// ==/UserScript==
+const _domainCheck = () => {
+
+    if (!window.location.hostname.includes('bizgo.com')) {
+
+        throw new Error('Script execution halted: Unauthorized domain.');
+
+    }
+
+};
+
+_domainCheck();
+
+
+
+class DOMExtractor {
+
+    static extractHeader() {
+
+        const saleDateInput = document.querySelector('input.salerecdate');
+
+        const customerInput = document.querySelector('input[id^="viewSO-customerName"]');
+
+        return {
+
+            saleDate: (saleDateInput?.getAttribute('title')) || (saleDateInput?.value) || '-',
+
+            customerName: (customerInput?.getAttribute('title')) || (customerInput?.value) || '-'
+
+        };
+
+    }
+
+
+
+    static extractProducts() {
+
+        const headerData = this.extractHeader();
+
+        const products = [];
+
+        const productElements = document.querySelectorAll('.prod-title.jqx-grid-cell-left-align');
+
+
+
+        // Exact column index for Quantity based on Bizgo DOM
+
+        const QTY_COLUMN_INDEX = "34";
+
+
+
+        productElements.forEach((prodEl) => {
+
+            const row = prodEl.closest('[role="row"]') || prodEl.parentElement?.parentElement;
+
+            if (!row) {
+
+                console.warn("Row container not found for product:", prodEl.textContent);
+
+                return;
+
+            }
+
+
+
+            const lengthEl = row.querySelector('[columnindex="29"]');
+
+            const widthEl = row.querySelector('[columnindex="30"]');
+
+            const heightEl = row.querySelector('[columnindex="31"]');
+
+            const remarkEl = row.querySelector('[columnindex="40"]');
+
+            const qtyEl = row.querySelector(`[columnindex="${QTY_COLUMN_INDEX}"]`);
+
+
+
+            const lengthVal = lengthEl?.textContent.trim() || '0';
+
+            const widthVal = widthEl?.textContent.trim() || '0';
+
+            const heightVal = heightEl?.textContent.trim() || '0';
+
+            const remarkVal = remarkEl?.textContent.trim() || '-';
+
+
+
+            // Parsing Quantity safely, default to 1 if it fails to read
+
+            const rawQty = parseInt(qtyEl?.textContent.trim() || '1', 10);
+
+            const qtyVal = isNaN(rawQty) ? 1 : rawQty;
+
+
+
+            // Push data based on QTY (Looping)
+
+            for (let i = 0; i < qtyVal; i++) {
+
+                products.push({
+
+                    saleDate: headerData.saleDate,
+
+                    customerName: headerData.customerName,
+
+                    productName: (prodEl.getAttribute('title')) || (prodEl.textContent.trim()) || '-',
+
+                    length: lengthVal,
+
+                    width: widthVal,
+
+                    height: heightVal,
+
+                    remark: remarkVal
+
+                });
+
+            }
+
+        });
+
+        return products;
+
+    }
+
+}
+
+
+
+class PrintService {
+
+    static printLabels(dataList) {
+
+        if (dataList.length === 0) {
+
+            alert("Data produk tidak ditemukan! Pastikan sudah berada di halaman detail SO.");
+
+            return;
+
+        }
+
+        const printWindow = window.open('', '_blank', 'width=400,height=400');
+
+        if (!printWindow) {
+
+            alert("Tolong izinkan pop-up browser untuk web ini biar bisa nge-print.");
+
+            return;
+
+        }
+
+        const htmlContent = `
+
+            <!DOCTYPE html>
+
+            <html lang="en">
+
+            <head>
+
+                <meta charset="UTF-8">
+
+                <title>Bizgo Label Print</title>
+
+                <style>
+
+                    @page { size: 40mm 30mm; margin: 0; }
+
+                    body { margin: 0; padding: 1.5mm; font-family: Arial, sans-serif; font-size: 8px; line-height: 1.3; width: 40mm; height: 30mm; box-sizing: border-box; color: #000; }
+
+                    .label-page { width: 100%; height: 100%; page-break-after: always; overflow: hidden; display: flex; flex-direction: column; }
+
+                    .label-page:last-child { page-break-after: avoid; }
+
+                    .line { margin-bottom: 2px; word-wrap: break-word; }
+
+                    .line-nowrap { margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+                </style>
+
+            </head>
+
+            <body>
+
+                ${dataList.map(data => `
+
+                    <div class="label-page">
+
+                        <div class="line-nowrap">Sale date: ${data.saleDate}</div>
+
+                        <div class="line-nowrap">Customer: ${data.customerName}</div>
+
+                        <div class="line">Name: ${data.productName}</div>
+
+                        <div class="line">Size: ${data.length}/${data.width}/${data.height}</div>
+
+                        <div class="line">Remark: ${data.remark}</div>
+
+                    </div>
+
+                `).join('')}
+
+                <script>
+
+                    window.onload = () => {
+
+                        window.print();
+
+                        setTimeout(() => window.close(), 500);
+
+                    };
+
+                </script>
+
+            </body>
+
+            </html>
+
+        `;
+
+        printWindow.document.open();
+
+        printWindow.document.write(htmlContent);
+
+        printWindow.document.close();
+
+    }
+
+}
+
+
+
+class UIInjector {
+
+    static injectFloatingButton() {
+
+        const existingBtn = document.getElementById('bizgo-tampermonkey-print');
+
+        if (existingBtn) return;
+
+        const btn = document.createElement('button');
+
+        btn.id = 'bizgo-tampermonkey-print';
+
+        btn.textContent = '🖨️ Print Label (Qty Based) By Bayu';
+
+        Object.assign(btn.style, {
+
+            position: 'fixed', bottom: '30px', left: '30px', padding: '12px 16px',
+
+            backgroundColor: '#28a745', color: '#fff', border: 'none', borderRadius: '8px',
+
+            cursor: 'grab', zIndex: '99999', boxShadow: '0 4px 6px rgba(0,0,0,0.3)',
+
+            fontWeight: 'bold', fontSize: '14px', userSelect: 'none'
+
+        });
+
+
+
+        let isDragging = false;
+
+        let isMoved = false;
+
+        let startX, startY;
+
+
+
+        const savedPos = localStorage.getItem('bizgoBtnPos');
+
+        if (savedPos) {
+
+            const pos = JSON.parse(savedPos);
+
+            btn.style.transform = `translate(${pos.x}px, ${pos.y}px)`;
+
+            btn.dataset.x = pos.x;
+
+            btn.dataset.y = pos.y;
+
+        } else {
+
+            btn.dataset.x = 0;
+
+            btn.dataset.y = 0;
+
+        }
+
+
+
+        btn.addEventListener('mousedown', (e) => {
+
+            isDragging = true;
+
+            isMoved = false;
+
+            btn.style.cursor = 'grabbing';
+
+            startX = e.clientX - parseFloat(btn.dataset.x);
+
+            startY = e.clientY - parseFloat(btn.dataset.y);
+
+        });
+
+
+
+        document.addEventListener('mousemove', (e) => {
+
+            if (!isDragging) return;
+
+            isMoved = true;
+
+            const newX = e.clientX - startX;
+
+            const newY = e.clientY - startY;
+
+            btn.style.transform = `translate(${newX}px, ${newY}px)`;
+
+            btn.dataset.x = newX;
+
+            btn.dataset.y = newY;
+
+        });
+
+
+
+        document.addEventListener('mouseup', () => {
+
+            if (isDragging) {
+
+                isDragging = false;
+
+                btn.style.cursor = 'grab';
+
+                localStorage.setItem('bizgoBtnPos', JSON.stringify({ x: btn.dataset.x, y: btn.dataset.y }));
+
+            }
+
+        });
+
+
+
+        btn.addEventListener('click', (e) => {
+
+            e.preventDefault();
+
+            if (isMoved) return;
+
+            const extractedData = DOMExtractor.extractProducts();
+
+            PrintService.printLabels(extractedData);
+
+        });
+
+        document.body.appendChild(btn);
+
+    }
+
+}
+
+
+
+const initPrintInjection = () => {
+
+    setInterval(() => {
+
+        UIInjector.injectFloatingButton();
+
+    }, 3000);
+
+};
+
+
+
+initPrintInjection();

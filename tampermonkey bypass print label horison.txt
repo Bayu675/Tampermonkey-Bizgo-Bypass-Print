@@ -6,6 +6,7 @@
 // @match        *://*.bizgo.com/*
 // @grant        none
 // ==/UserScript==
+// Cek domain
 const _domainCheck = () => {
     if (!window.location.hostname.includes('bizgo.com')) {
         throw new Error('Script execution halted: Unauthorized domain.');
@@ -14,59 +15,71 @@ const _domainCheck = () => {
 _domainCheck();
 
 class DataExtractor {
-    static extractHeader() {
-        const saleDateInput = document.querySelector('input.salerecdate');
-        const customerInput = document.querySelector('input[id^="viewSO-customerName"]');
-        return {
-            saleDate: (saleDateInput?.getAttribute('title')) || (saleDateInput?.value) || '-',
-            customerName: (customerInput?.getAttribute('title')) || (customerInput?.value) || '-'
-        };
-    }
-
-    static extractProducts() {
-        const headerData = this.extractHeader();
+    static extractAllTabs() {
         const products = [];
+        // Cari semua input Nomor SO yang ada di DOM (termasuk di tab yang lagi hidden)
+        const soOrderInputs = document.querySelectorAll('input[id^="viewSO-orderNumber"]');
 
-        // Cari ID dari tabel jqxGrid yang lagi aktif
-        const gridElement = document.querySelector('div[id^="viewSaleOrder_grid"]');
-        if (!gridElement || !window.$) {
-            alert("Tabel data tidak ditemukan atau jQuery belum dimuat!");
+        if (soOrderInputs.length === 0) {
+            console.warn("Tidak ada input SO yang ditemukan.");
             return products;
         }
 
-        const gridId = gridElement.id;
-        // Sedot SEMUA data langsung dari memori jqxGrid (bypass virtual scrolling)
-        const rows = window.$('#' + gridId).jqxGrid('getrows');
+        // Looping setiap tab SO yang lagi kebuka
+        soOrderInputs.forEach((soInput) => {
+            // Dapet nomor SO-nya
+            const soNumber = (soInput.getAttribute('title')) || (soInput.value) || '-';
 
-        if (!rows || rows.length === 0) {
-            console.warn("Tidak ada data baris yang ditemukan di dalam grid.");
-            return products;
-        }
+            // Dapet angka unik (timestamp) dari tab ini buat nyari tabel dan data lainnya
+            const suffix = soInput.id.replace('viewSO-orderNumber', '');
 
-        // Looping setiap baris barang
-        rows.forEach((row) => {
-            // Ambil value dari memori
-            const lengthVal = row.extent !== undefined ? row.extent : '0';
-            const widthVal = row.width !== undefined ? row.width : '0';
-            const heightVal = row.height !== undefined ? row.height : '0';
-            const remarkVal = row.remark || '-';
-            const productName = row.name || row.descr || '-';
+            // Cari Customer khusus di tab ini
+            const customerInput = document.getElementById('viewSO-customerName' + suffix);
+            const customerName = customerInput ? ((customerInput.getAttribute('title')) || (customerInput.value) || '-') : '-';
 
-            // Parsing Quantity safely, default to 1 kalau kosong
-            const rawQty = parseInt(row.qty, 10);
-            const qtyVal = isNaN(rawQty) || rawQty < 1 ? 1 : rawQty;
+            // Cari Tanggal di dalem kontainer tab yang sama
+            let container = soInput.parentElement;
+            let saleDateInput = null;
+            while(container && container !== document.body) {
+                saleDateInput = container.querySelector('input.salerecdate');
+                if (saleDateInput) break;
+                container = container.parentElement;
+            }
+            const saleDate = saleDateInput ? ((saleDateInput.getAttribute('title')) || (saleDateInput.value) || '-') : '-';
 
-            // Push data sebanyak QTY-nya
-            for (let i = 0; i < qtyVal; i++) {
-                products.push({
-                    saleDate: headerData.saleDate,
-                    customerName: headerData.customerName,
-                    productName: productName,
-                    length: lengthVal,
-                    width: widthVal,
-                    height: heightVal,
-                    remark: remarkVal
-                });
+            // Eksekusi tarikan data jqxGrid dari memori khusus tab ini
+            const gridId = 'viewSaleOrder_grid' + suffix;
+            const gridElement = document.getElementById(gridId);
+
+            if (gridElement && window.$) {
+                const rows = window.$('#' + gridId).jqxGrid('getrows');
+                if (rows && rows.length > 0) {
+                    rows.forEach((row) => {
+                        const lengthVal = row.extent !== undefined ? row.extent : '0';
+                        const widthVal = row.width !== undefined ? row.width : '0';
+                        const heightVal = row.height !== undefined ? row.height : '0';
+                        const remarkVal = row.remark || '-';
+                        const productName = row.name || row.descr || '-';
+
+                        // Parse Quantity, default 1 kalau error atau kosong
+                        const rawQty = parseInt(row.qty, 10);
+                        const qtyVal = isNaN(rawQty) || rawQty < 1 ? 1 : rawQty;
+
+                        // Looping push produk berdasarkan qty-nya
+                        for (let i = 0; i < qtyVal; i++) {
+                            products.push({
+                                soNumber: soNumber,
+                                saleDate: saleDate,
+                                customerName: customerName,
+                                productName: productName,
+                                length: lengthVal,
+                                width: widthVal,
+                                height: heightVal,
+                                remark: remarkVal
+                            });
+                        }
+                    });
+                }
             }
         });
 
@@ -77,12 +90,11 @@ class DataExtractor {
 class PrintService {
     static printLabels(dataList) {
         if (dataList.length === 0) {
-            alert("Data produk kosong! Pastikan ada produk di SO ini.");
+            alert("Data produk kosong! Pastikan ada produk di tab SO yang terbuka.");
             return;
         }
 
-        // Log ke console buat mastiin total labelnya bener
-        console.log(`Mempersiapkan print untuk ${dataList.length} label...`);
+        console.log(`Mempersiapkan print untuk total ${dataList.length} label dari semua tab...`);
 
         const printWindow = window.open('', '_blank', 'width=400,height=400');
         if (!printWindow) {
@@ -102,11 +114,13 @@ class PrintService {
                     .label-page:last-child { page-break-after: avoid; }
                     .line { margin-bottom: 2px; word-wrap: break-word; }
                     .line-nowrap { margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+                    .so-header { font-weight: bold; border-bottom: 1px solid #000; padding-bottom: 1px; margin-bottom: 2px; font-size: 9px; }
                 </style>
             </head>
             <body>
                 ${dataList.map(data => `
                     <div class="label-page">
+                        <div class="line-nowrap so-header">SO: ${data.soNumber}</div>
                         <div class="line-nowrap">Sale date: ${data.saleDate}</div>
                         <div class="line-nowrap">Customer: ${data.customerName}</div>
                         <div class="line">Name: ${data.productName}</div>
@@ -135,7 +149,7 @@ class UIInjector {
         if (existingBtn) return;
         const btn = document.createElement('button');
         btn.id = 'bizgo-tampermonkey-print';
-        btn.textContent = '🖨️ Print Label V3 By Bayu';
+        btn.textContent = '🖨️ Print Label V3.1 by Bayu';
         Object.assign(btn.style, {
             position: 'fixed', bottom: '30px', left: '30px', padding: '12px 16px',
             backgroundColor: '#007bff', color: '#fff', border: 'none', borderRadius: '8px',
@@ -188,8 +202,8 @@ class UIInjector {
             e.preventDefault();
             if (isMoved) return; // Mencegah kepencet pas lagi nge-drag
 
-            // Panggil eksekusi dari JQXExtractor yang baru
-            const extractedData = DataExtractor.extractProducts();
+            // Eksekusi pencetakan
+            const extractedData = DataExtractor.extractAllTabs();
             PrintService.printLabels(extractedData);
         });
         document.body.appendChild(btn);
